@@ -1,4 +1,5 @@
 const Memory = require("../models/memory.model");
+const User=require("../models/user.model");
 
 module.exports.createMemoryRepo = async (memorymodel) => {
     try {
@@ -43,23 +44,117 @@ module.exports.updateMemoryRepo = async (memoryModel) => {
 module.exports.getMemory = async (id) => {
     try {
         var memory = await Memory.findOne({ memory_id: id });
-        return memory;
-    } catch (id) {
-        console.log(id);
+        if(!memory){
+            throw new Error("Memory not found");
+        }
+        const user= await User.findOne({user_id:memory.createdBy},'first_name last_name email');
+        if(!user){
+            throw new Error("user not found for the memory");
+        }
+
+        const sharedwithUsers= await User.find({
+            user_id:{$in:memory.privacy.sharedWith}
+        });
+        const sharedwithTransformed=sharedwithUsers.map(user=>({
+            name: user.first_name + " " + user.last_name,
+            email: user.email,
+            user_id: user.user_id,
+        }));
+
+        const memoryWithUser = {
+            ...memory.toObject(),
+            privacy:{
+                ...memory.privacy,
+                sharedWith:sharedwithTransformed
+            },
+            createdByDetails: {
+                id: memory.createdBy,
+                name: user.first_name +" "+user.last_name,
+                email: user.email,
+            },
+        };
+        return memoryWithUser;
+    } catch (error) {
+        console.log(error);
     }
 
 }
 module.exports.listAllMemories= async () => {
     try {
-        var memories=await Memory.find({});
-        return memories;
+        const memories = await Memory.aggregate([
+            // Perform a lookup to join with the User collection
+            {
+                $lookup: {
+                    from: "users", 
+                    localField: "createdBy",
+                    foreignField: "user_id", 
+                    as: "creatorDetails", 
+                },
+            },
+
+        
+            {
+                $unwind: {
+                    path: "$creatorDetails",
+                    preserveNullAndEmptyArrays: true, 
+                },
+            },
+            {
+                $lookup: {
+                    from: "users", 
+                    localField: "privacy.sharedWith", 
+                    foreignField: "user_id",
+                    as: "sharedWithDetails", 
+                },
+            },
+            {
+                $project: {
+                
+                    memory_id: 1,
+                    title: 1,
+                    description: 1,
+                    images: 1,
+                    multimediaTracks: 1,
+                    location: 1,
+                    emotions: 1,
+                    colorTheme: 1,
+                    privacy: {
+                        zone: 1,  
+                        sharedWith: {
+                   
+                            $map: {
+                                input: "$sharedWithDetails",
+                                as: "user",
+                                in: {
+                                    name: { $concat: ["$$user.first_name", " ", "$$user.last_name"] },
+                                    email: "$$user.email", 
+                                    user_id: "$$user.user_id",
+                                },
+                            },
+                        },
+                    },
+                    viewied_by: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    // Add user info to createdBy
+                    createdByDetails: {
+                        name: { $concat: ["$creatorDetails.first_name", " ", "$creatorDetails.last_name"] },
+                        email: "$creatorDetails.email", 
+                        user_id: "$creatorDetails.user_id" 
+                    }
+                 
+                },
+            },
+        ]);
+
+        return memories; 
 
     } catch (error) {
         console.log(error);
     }
 
 }
-module.exports.deleteMemory=async()=>{
+module.exports.deleteMemory=async(id)=>{
     try{
    
         var memory = await Memory.findOneAndDelete({ memory_id: id });
